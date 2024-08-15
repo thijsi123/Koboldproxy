@@ -1,3 +1,4 @@
+# proxy which switches between multiple koboldcpp api urls
 from flask import Flask, request, Response, stream_with_context
 import requests
 import logging
@@ -15,7 +16,7 @@ ALTERNATIVE_API_URL = "http://127.0.0.1:5002/api"
 api_urls = [KOBOLD_API_URL, ALTERNATIVE_API_URL]
 
 # Control options
-delay_between_switches = 5  # in seconds
+delay_between_switches = 1  # in seconds when in time mode or per generation in request mode
 switch_mode = "request"  # can be "request" or "time"
 switch_interval = 60  # in seconds, if switch_mode is "time"
 max_retries = 3  # maximum number of retries for failed requests
@@ -35,11 +36,12 @@ def get_next_api_url():
             last_switch_time = time.time()
             logging.info(f"Switched API due to time interval. New API: {api_urls[current_api_index]}")
     elif switch_mode == "request":
-        request_count += 1
-        if request_count >= delay_between_switches:
-            current_api_index = (current_api_index + 1) % len(api_urls)
-            request_count = 0
-            logging.info(f"Switched API due to request count. New API: {api_urls[current_api_index]}")
+        if request.path == '/v1/completions':  # Only count main generation requests
+            request_count += 1
+            if request_count >= delay_between_switches:
+                current_api_index = (current_api_index + 1) % len(api_urls)
+                request_count = 0
+                logging.info(f"Switched API due to request count. New API: {api_urls[current_api_index]}")
 
     return api_urls[current_api_index]
 
