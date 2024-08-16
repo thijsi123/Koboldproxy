@@ -1,5 +1,5 @@
 # proxy which switches between multiple koboldcpp api urls
-from flask import Flask, request, Response, stream_with_context
+from flask import Flask, request, Response, stream_with_context, jsonify
 import requests
 import logging
 from flask_cors import CORS
@@ -138,9 +138,8 @@ themes = {
 }
 
 
-# Set the default theme here. Change this to apply a different theme.
-DEFAULT_THEME = "dark_fantasy"
-
+# Set the active themes here. You can initialize with multiple themes if desired.
+ACTIVE_THEMES = ["medieval", "dark_fantasy"]
 
 def get_next_api_url():
     global current_api_index, last_switch_time, request_count
@@ -160,14 +159,9 @@ def get_next_api_url():
 
     return api_urls[current_api_index]
 
-
 def stream_response(response):
     for chunk in response.iter_content(chunk_size=1024):
         yield chunk
-
-
-import re
-
 
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 def proxy(path):
@@ -185,13 +179,16 @@ def proxy(path):
                 file = request.files['file']
                 files = {'file': (file.filename, file.stream, file.content_type)}
 
-            # Process theme for completions request
+            # Process themes for completions request
             if request.method == 'POST' and path == 'v1/completions':
                 data = request.get_json()
 
-                if DEFAULT_THEME != "none" and DEFAULT_THEME in themes:
+                if ACTIVE_THEMES:
                     prompt = data['prompt']
-                    theme_entry = f'"{DEFAULT_THEME}": "{themes[DEFAULT_THEME]}",\n'
+                    theme_entries = []
+                    for theme in ACTIVE_THEMES:
+                        if theme in themes:
+                            theme_entries.append(f'"{theme}": "{themes[theme]}",\n')
 
                     # Split the prompt into lines
                     lines = prompt.split('\n')
@@ -199,8 +196,9 @@ def proxy(path):
                     # Find the insertion point (4 lines from the end)
                     insertion_point = max(0, len(lines) - 4)
 
-                    # Insert the theme entry
-                    lines.insert(insertion_point, theme_entry)
+                    # Insert the theme entries
+                    for entry in theme_entries:
+                        lines.insert(insertion_point, entry)
 
                     # Rejoin the lines
                     data['prompt'] = '\n'.join(lines)
@@ -241,6 +239,28 @@ def proxy(path):
     logging.error(f"Failed to proxy request after {max_retries} attempts")
     return Response("Failed to proxy request", status=500)
 
+@app.route('/themes', methods=['GET', 'POST', 'DELETE'])
+def manage_themes():
+    global ACTIVE_THEMES
+
+    if request.method == 'GET':
+        return jsonify({"active_themes": ACTIVE_THEMES})
+
+    elif request.method == 'POST':
+        new_theme = request.json.get('theme')
+        if new_theme and new_theme in themes and new_theme not in ACTIVE_THEMES:
+            ACTIVE_THEMES.append(new_theme)
+            return jsonify({"message": f"Theme '{new_theme}' added", "active_themes": ACTIVE_THEMES})
+        else:
+            return jsonify({"error": "Invalid theme or theme already active"}), 400
+
+    elif request.method == 'DELETE':
+        theme_to_remove = request.json.get('theme')
+        if theme_to_remove in ACTIVE_THEMES:
+            ACTIVE_THEMES.remove(theme_to_remove)
+            return jsonify({"message": f"Theme '{theme_to_remove}' removed", "active_themes": ACTIVE_THEMES})
+        else:
+            return jsonify({"error": "Theme not in active themes"}), 400
 
 def switch_api_periodically():
     global current_api_index, last_switch_time
@@ -250,7 +270,6 @@ def switch_api_periodically():
             current_api_index = (current_api_index + 1) % len(api_urls)
             last_switch_time = time.time()
             logging.info(f"Periodically switched API. New API: {api_urls[current_api_index]}")
-
 
 if __name__ == '__main__':
     logging.info("Starting Kobold API proxy")
