@@ -205,25 +205,26 @@ def proxy(path):
             if request.method == 'POST' and path == 'v1/completions':
                 data = request.get_json()
 
-                if ACTIVE_THEMES:
+                if ACTIVE_THEMES and any(theme != "none" for theme in ACTIVE_THEMES):
                     prompt = data['prompt']
                     theme_entries = []
                     for theme in ACTIVE_THEMES:
-                        if theme in themes:
+                        if theme in themes and theme != "none":
                             theme_entries.append(f'"{theme}": "{themes[theme]}",\n')
 
-                    # Split the prompt into lines
-                    lines = prompt.split('\n')
+                    if theme_entries:  # Only modify the prompt if there are non-"none" themes
+                        # Split the prompt into lines
+                        lines = prompt.split('\n')
 
-                    # Find the insertion point (4 lines from the end)
-                    insertion_point = max(0, len(lines) - 4)
+                        # Find the insertion point (4 lines from the end)
+                        insertion_point = max(0, len(lines) - 4)
 
-                    # Insert the theme entries
-                    for entry in theme_entries:
-                        lines.insert(insertion_point, entry)
+                        # Insert the theme entries
+                        for entry in theme_entries:
+                            lines.insert(insertion_point, entry)
 
-                    # Rejoin the lines
-                    data['prompt'] = '\n'.join(lines)
+                        # Rejoin the lines
+                        data['prompt'] = '\n'.join(lines)
 
                 request_data = json.dumps(data)
             else:
