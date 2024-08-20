@@ -141,6 +141,7 @@ themes = {
 # Set the active themes here. You can initialize with multiple themes if desired.
 ACTIVE_THEMES = ["none"]
 
+
 def get_next_api_url():
     global current_api_index, last_switch_time, request_count
 
