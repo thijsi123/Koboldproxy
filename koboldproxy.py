@@ -139,35 +139,48 @@ themes = {
 
 
 # Set the active themes here. You can initialize with multiple themes if desired.
-ACTIVE_THEMES = ["medieval", "dark_fantasy"]
+ACTIVE_THEMES = ["none"]
 
 def get_next_api_url():
     global current_api_index, last_switch_time, request_count
 
-    if switch_mode == "time":
-        if time.time() - last_switch_time >= switch_interval:
-            current_api_index = (current_api_index + 1) % len(api_urls)
-            last_switch_time = time.time()
-            logging.info(f"Switched API due to time interval. New API: {api_urls[current_api_index]}")
-    elif switch_mode == "request":
-        if request.path == '/v1/completions':  # Only count main generation requests
-            request_count += 1
-            if request_count >= delay_between_switches:
+    for _ in range(len(api_urls)):
+        if switch_mode == "time":
+            if time.time() - last_switch_time >= switch_interval:
                 current_api_index = (current_api_index + 1) % len(api_urls)
-                request_count = 0
-                logging.info(f"Switched API due to request count. New API: {api_urls[current_api_index]}")
+                last_switch_time = time.time()
+        elif switch_mode == "request":
+            if request.path == '/v1/completions':
+                request_count += 1
+                if request_count >= delay_between_switches:
+                    current_api_index = (current_api_index + 1) % len(api_urls)
+                    request_count = 0
 
-    return api_urls[current_api_index]
+        # Check if the current API is available
+        try:
+            requests.get(api_urls[current_api_index], timeout=5)
+            logging.info(f"Using API: {api_urls[current_api_index]}")
+            return api_urls[current_api_index]
+        except requests.RequestException:
+            logging.warning(f"API {api_urls[current_api_index]} is not available. Trying next.")
+            current_api_index = (current_api_index + 1) % len(api_urls)
+
+    logging.error("All APIs are unavailable.")
+    return None
 
 def stream_response(response):
     for chunk in response.iter_content(chunk_size=1024):
         yield chunk
 
+
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 def proxy(path):
     for attempt in range(max_retries):
+        api_url = get_next_api_url()
+        if api_url is None:
+            return Response("All APIs are currently unavailable", status=503)
+
         try:
-            api_url = get_next_api_url()
             target_url = f"{api_url}/{path}"
             logging.info(f"Proxying request to: {target_url}")
 
@@ -235,6 +248,7 @@ def proxy(path):
         except requests.RequestException as e:
             logging.error(f"Error connecting to {api_url}: {str(e)}")
             time.sleep(1)  # Wait for 1 second before retrying
+            continue  # This will cause it to try the next API
 
     logging.error(f"Failed to proxy request after {max_retries} attempts")
     return Response("Failed to proxy request", status=500)
