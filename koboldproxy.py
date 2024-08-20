@@ -141,30 +141,38 @@ themes = {
 # Set the active themes here. You can initialize with multiple themes if desired.
 ACTIVE_THEMES = ["none"]
 
+def is_api_available(url):
+    try:
+        requests.get(url, timeout=5)
+        return True
+    except requests.RequestException:
+        return False
+
+def switch_api():
+    global current_api_index
+    current_api_index = (current_api_index + 1) % len(api_urls)
+
+def should_switch():
+    global last_switch_time, request_count
+    if switch_mode == "time":
+        return time.time() - last_switch_time >= switch_interval
+    elif switch_mode == "request":
+        return request.path == '/v1/completions' and request_count >= delay_between_switches
+    return False
 
 def get_next_api_url():
     global current_api_index, last_switch_time, request_count
 
-    for _ in range(len(api_urls)):
-        if switch_mode == "time":
-            if time.time() - last_switch_time >= switch_interval:
-                current_api_index = (current_api_index + 1) % len(api_urls)
-                last_switch_time = time.time()
-        elif switch_mode == "request":
-            if request.path == '/v1/completions':
-                request_count += 1
-                if request_count >= delay_between_switches:
-                    current_api_index = (current_api_index + 1) % len(api_urls)
-                    request_count = 0
+    if should_switch():
+        switch_api()
+        last_switch_time = time.time()
+        request_count = 0
 
-        # Check if the current API is available
-        try:
-            requests.get(api_urls[current_api_index], timeout=5)
+    for _ in range(len(api_urls)):
+        if is_api_available(api_urls[current_api_index]):
             logging.info(f"Using API: {api_urls[current_api_index]}")
             return api_urls[current_api_index]
-        except requests.RequestException:
-            logging.warning(f"API {api_urls[current_api_index]} is not available. Trying next.")
-            current_api_index = (current_api_index + 1) % len(api_urls)
+        switch_api()
 
     logging.error("All APIs are unavailable.")
     return None
@@ -173,9 +181,9 @@ def stream_response(response):
     for chunk in response.iter_content(chunk_size=1024):
         yield chunk
 
-
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 def proxy(path):
+    global request_count
     for attempt in range(max_retries):
         api_url = get_next_api_url()
         if api_url is None:
@@ -244,6 +252,10 @@ def proxy(path):
             headers = [(name, value) for (name, value) in resp.raw.headers.items() if
                        name.lower() not in excluded_headers]
             response = Response(resp.content, resp.status_code, headers)
+
+            if switch_mode == "request" and path == 'v1/completions':
+                request_count += 1
+
             return response
 
         except requests.RequestException as e:
@@ -277,17 +289,26 @@ def manage_themes():
         else:
             return jsonify({"error": "Theme not in active themes"}), 400
 
+@app.route('/health')
+def health_check():
+    available_apis = [url for url in api_urls if is_api_available(url)]
+    return jsonify({
+        "status": "healthy" if available_apis else "unhealthy",
+        "available_apis": available_apis
+    })
+
 def switch_api_periodically():
     global current_api_index, last_switch_time
     while True:
         time.sleep(switch_interval)
         if switch_mode == "time":
-            current_api_index = (current_api_index + 1) % len(api_urls)
+            switch_api()
             last_switch_time = time.time()
             logging.info(f"Periodically switched API. New API: {api_urls[current_api_index]}")
 
 if __name__ == '__main__':
     logging.info("Starting Kobold API proxy")
+    logging.info(f"Configured API URLs: {api_urls}")
     if switch_mode == "time":
         threading.Thread(target=switch_api_periodically, daemon=True).start()
-    app.run(debug=True, host='0.0.0.0', port=5066)
+    app.run(host='0.0.0.0', port=5066, debug=False)
