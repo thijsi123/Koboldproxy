@@ -12,7 +12,7 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 
 # Configuration options
-KOBOLD_API_URL = "http://127.0.0.1:5001/api"
+KOBOLD_API_URL = "https://handbags-brunswick-accident-decline.trycloudflare.com/api"
 ALTERNATIVE_API_URL = "http://127.0.0.1:5002/api"
 api_urls = [KOBOLD_API_URL, ALTERNATIVE_API_URL]
 
@@ -143,8 +143,9 @@ ACTIVE_THEMES = ["none"]
 
 def is_api_available(url):
     try:
-        requests.get(url, timeout=5)
-        return True
+        # Use a more specific endpoint, like /v1/models, if available
+        response = requests.get(f"{url}/v1/models", timeout=5)
+        return response.status_code == 200
     except requests.RequestException:
         return False
 
@@ -168,10 +169,13 @@ def get_next_api_url():
         last_switch_time = time.time()
         request_count = 0
 
+    original_index = current_api_index
     for _ in range(len(api_urls)):
         if is_api_available(api_urls[current_api_index]):
-            logging.info(f"Using API: {api_urls[current_api_index]}")
+            if current_api_index != original_index:
+                logging.info(f"Switched to API: {api_urls[current_api_index]}")
             return api_urls[current_api_index]
+        logging.warning(f"API {api_urls[current_api_index]} is unavailable. Trying next.")
         switch_api()
 
     logging.error("All APIs are unavailable.")
@@ -205,14 +209,17 @@ def proxy(path):
             if request.method == 'POST' and path == 'v1/completions':
                 data = request.get_json()
 
-                if ACTIVE_THEMES and any(theme != "none" for theme in ACTIVE_THEMES):
+                # Check if there are any non-"none" themes
+                non_none_themes = [theme for theme in ACTIVE_THEMES if theme != "none"]
+
+                if non_none_themes:
                     prompt = data['prompt']
                     theme_entries = []
-                    for theme in ACTIVE_THEMES:
-                        if theme in themes and theme != "none":
+                    for theme in non_none_themes:
+                        if theme in themes:
                             theme_entries.append(f'"{theme}": "{themes[theme]}",\n')
 
-                    if theme_entries:  # Only modify the prompt if there are non-"none" themes
+                    if theme_entries:
                         # Split the prompt into lines
                         lines = prompt.split('\n')
 
